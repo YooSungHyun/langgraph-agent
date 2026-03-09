@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.backends.legacy:build"
+
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = [".venv*", "tests*", "data*", "docs*", "scripts*"]
+
+[project]
+name = "agent-test"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain-core>=1.2.17",
+    "langchain-openai>=1.1.10",
+    "langgraph>=1.0.10",
+    "python-dotenv>=1.2.2",
+]
