@@ -1,54 +1,50 @@
-import json
-from typing import AsyncIterator
+import logging
+from contextlib import asynccontextmanager
 
+import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
 
+from backend import AgentException, agent_exception_handler, run_router
+from config import get_settings
 from graph import build_graph
 
 load_dotenv()
 
-app = FastAPI(title="Sequential Agent API")
-graph = build_graph()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 
-class RunRequest(BaseModel):
-    topic: str
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Building agent graph...")
+    app.state.graph = build_graph()
+    logger.info("Startup completed successfully")
+    yield
+    logger.info("Shutdown completed successfully")
 
 
-def _initial_state(topic: str) -> dict:
-    return {
-        "topic": topic,
-        "messages": [],
-        "research": "",
-        "analysis": "",
-        "final_report": "",
-    }
+app = FastAPI(title="Supervisor Agent API", lifespan=lifespan)
+app.include_router(run_router)
 
 
-@app.post("/run")
-async def run(req: RunRequest) -> dict:
-    """파이프라인을 실행하고 최종 결과를 한 번에 반환한다."""
-    result = await graph.ainvoke(_initial_state(req.topic))
-    return {
-        "topic": result["topic"],
-        "research": result["research"],
-        "analysis": result["analysis"],
-        "final_report": result["final_report"],
-    }
+@app.exception_handler(AgentException)
+async def handle_agent_exception(request, exc: AgentException):
+    http_exc = agent_exception_handler(exc)
+    return JSONResponse(status_code=http_exc.status_code, content=http_exc.detail)
 
 
-@app.post("/run/stream")
-async def run_stream(req: RunRequest) -> StreamingResponse:
-    """각 노드 완료 시점마다 결과를 SSE로 스트리밍한다."""
-
-    async def event_generator() -> AsyncIterator[str]:
-        async for step in graph.astream(_initial_state(req.topic), stream_mode="updates"):
-            node_name, output = next(iter(step.items()))
-            payload = json.dumps({"node": node_name, "output": output}, ensure_ascii=False, default=str)
-            yield f"data: {payload}\n\n"
-        yield "data: [DONE]\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+if __name__ == "__main__":
+    settings = get_settings()
+    uvicorn.run(
+        "api:app",
+        host=settings.app.host,
+        port=settings.app.port,
+        reload=settings.app.reload,
+        workers=settings.app.workers,
+    )
