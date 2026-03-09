@@ -325,15 +325,24 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from graph.state import AgentState
 
+
+def _to_str(content) -> str:
+    """AIMessage.content가 list로 반환되는 경우(Gemini 등)를 단일 문자열로 정규화."""
+    if isinstance(content, str):
+        return content
+    return "\n".join(part if isinstance(part, str) else part.get("text", "") for part in content)
+
+
 class MathHelperNode:
     def __init__(self, llm: BaseChatModel):
         self.llm = llm
 
     async def __call__(self, state: AgentState) -> dict:
         response = await self.llm.ainvoke([HumanMessage(content=state["query"])])
+        content = _to_str(response.content)
         return {
-            "final_answer": response.content,
-            "messages": [AIMessage(content=response.content, name="math_helper")],
+            "final_answer": content,
+            "messages": [AIMessage(content=content, name="math_helper")],
         }
 ```
 

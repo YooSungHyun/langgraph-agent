@@ -5,6 +5,13 @@ from agents.tools import TOOLS, get_current_datetime
 from graph.state import AgentState
 
 
+def _to_str(content) -> str:
+    """AIMessage.content가 list로 반환되는 경우(Gemini 등)를 단일 문자열로 정규화."""
+    if isinstance(content, str):
+        return content
+    return "\n".join(part if isinstance(part, str) else part.get("text", "") for part in content)
+
+
 class TextHelperNode:
     def __init__(self, llm: BaseChatModel):
         self.llm = llm.bind_tools(TOOLS)
@@ -24,7 +31,7 @@ class TextHelperNode:
         response = await self.llm.ainvoke(messages)
 
         tool_result = ""
-        final_content = response.content
+        final_content = _to_str(response.content)
 
         if response.tool_calls:
             messages.append(response)
@@ -36,7 +43,7 @@ class TextHelperNode:
                     )
 
             follow_up = await self.llm.ainvoke(messages)
-            final_content = follow_up.content
+            final_content = _to_str(follow_up.content)
 
         return {
             "tool_result": tool_result,
