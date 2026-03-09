@@ -3,18 +3,15 @@ from langgraph.graph.state import CompiledStateGraph
 
 from agents import CodeHelperNode, IntakeNode, SupervisorNode, TextHelperNode
 from config import AgentConfig, create_llm, get_settings
+from graph.routing import route_from_supervisor
 from graph.state import AgentState
-
-
-def _route_after_supervisor(state: AgentState) -> str:
-    """supervisor가 결정한 route 값으로 다음 노드를 선택한다."""
-    return state["route"]
 
 
 def build_graph(config: AgentConfig | None = None) -> CompiledStateGraph:
     """설정을 받아 supervisor 분기 그래프를 생성한다.
 
     흐름: START → intake → supervisor → (code_helper | text_helper) → END
+    분기 정의는 graph/routing.py의 route_from_supervisor에서 관리한다.
     """
     agent_config = config or get_settings().agents
 
@@ -26,11 +23,8 @@ def build_graph(config: AgentConfig | None = None) -> CompiledStateGraph:
 
     builder.add_edge(START, "intake")
     builder.add_edge("intake", "supervisor")
-    builder.add_conditional_edges(
-        "supervisor",
-        _route_after_supervisor,
-        {"code": "code_helper", "text": "text_helper"},
-    )
+    builder.add_conditional_edges("supervisor", route_from_supervisor)
+
     builder.add_edge("code_helper", END)
     builder.add_edge("text_helper", END)
 

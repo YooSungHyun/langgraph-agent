@@ -42,6 +42,23 @@ AgentState
   messages     ── 모든 노드의 메시지를 누적 (add_messages reducer)
 ```
 
+### 라우팅 관리
+
+분기 로직은 **`graph/routing.py`** 의 `route_from_supervisor` 함수 한 곳에서 관리합니다.
+
+```python
+# graph/routing.py
+def route_from_supervisor(state: AgentState) -> str:
+    if state["route"] == "code":
+        return "code_helper"
+    elif state["route"] == "text":
+        return "text_helper"
+    else:
+        raise ValueError(f"Unknown route: {state['route']}")
+```
+
+이 함수를 `builder.py`의 `add_conditional_edges`에 넘기면 LangGraph가 supervisor 노드 실행 후 자동으로 호출해 다음 노드를 결정합니다. **새 분기 추가 시 여기에 `elif` 하나만 추가하면 됩니다.**
+
 ---
 
 ## 프로젝트 구조
@@ -57,6 +74,7 @@ agent-test/
 │   └── text_helper.py      # 일반 지식 답변 노드 (tool calling)
 ├── graph/
 │   ├── __init__.py
+│   ├── routing.py          # route_from_supervisor 라우팅 함수
 │   ├── state.py            # 공유 상태 스키마 (AgentState)
 │   └── builder.py          # 그래프 조립 (build_graph, 조건부 분기)
 ├── backend/
@@ -276,14 +294,33 @@ uv run --group dev python examples/client.py
 
 ---
 
-## 새 에이전트 노드 추가하는 법
+## 새 분기 노드 추가하는 법
 
-아래는 `code_helper`와 `text_helper` 사이에 새 분기 노드를 추가하는 예시입니다.
+`math_helper`를 추가하는 예시입니다.
 
-1. `agents/`에 새 파일 작성:
+### 1. `graph/routing.py` — 분기 조건 추가
 
 ```python
-# agents/math_helper.py
+def route_from_supervisor(state: AgentState) -> str:
+    if state["route"] == "code":
+        return "code_helper"
+    elif state["route"] == "text":
+        return "text_helper"
+    elif state["route"] == "math":   # 추가
+        return "math_helper"         # 추가
+    else:
+        raise ValueError(f"Unknown route: {state['route']}")
+```
+
+### 2. `graph/state.py` — route 타입 확장
+
+```python
+route: Literal["code", "text", "math"]
+```
+
+### 3. `agents/math_helper.py` — 노드 구현
+
+```python
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from graph.state import AgentState
@@ -300,43 +337,72 @@ class MathHelperNode:
         }
 ```
 
-2. `agents/__init__.py`에 export 추가
-
-3. `graph/state.py`의 `route` 타입에 새 값 추가:
+### 4. `agents/__init__.py` — export 추가
 
 ```python
-route: Literal["code", "text", "math"]
+from .math_helper import MathHelperNode
 ```
 
-4. `config/settings.py`의 `AgentConfig`에 LLM 설정 추가:
+### 5. `config/settings.py` — LLM 설정 추가
 
 ```python
-math_helper: LLMConfig = LLMConfig()
+class AgentConfig(BaseModel):
+    ...
+    math_helper: LLMConfig = LLMConfig()
 ```
 
-5. `graph/builder.py`에 노드·분기 추가:
+### 6. `graph/builder.py` — 노드 등록 및 END 엣지 추가
 
 ```python
 builder.add_node("math_helper", MathHelperNode(create_llm(agent_config.math_helper)))
-builder.add_conditional_edges(
-    "supervisor",
-    _route_after_supervisor,
-    {"code": "code_helper", "text": "text_helper", "math": "math_helper"},
-)
 builder.add_edge("math_helper", END)
 ```
 
-6. `supervisor.py`의 분류 프롬프트와 `RouteDecision` 타입을 새 route 값을 인식하도록 수정
+### 7. `agents/supervisor.py` — 분류 프롬프트·타입 수정
 
-7. 토큰 스트리밍 대상에 포함하려면 `main.py`와 `backend/routes/run.py`의 노드 목록에 추가:
+`RouteDecision.route` 타입과 프롬프트에 새 값을 추가합니다.
 
 ```python
-# main.py
+class RouteDecision(BaseModel):
+    route: Literal["code", "text", "math"]
+    reason: str
+```
+
+```python
+prompt = (
+    "... 수학·통계·공식 계산은 route='math'로, "
+    "코드 관련은 route='code'로, 그 외는 route='text'로 분류하세요.\n\n"
+    f"질문: {state['query']}"
+)
+```
+
+### 8. `main.py` — 스트리밍 레이블 추가
+
+```python
 NODE_LABELS = {
     ...,
     "math_helper": "MATH HELPER",
 }
+```
 
-# backend/routes/run.py
+### 9. `backend/routes/run.py` — 스트리밍 노드 추가
+
+```python
 _STREAM_NODES = {"intake", "supervisor", "code_helper", "text_helper", "math_helper"}
 ```
+
+---
+
+### 파일별 수정 범위 요약
+
+| 파일 | 내용 |
+|---|---|
+| `graph/routing.py` | `elif` 분기 추가 |
+| `graph/state.py` | `route` Literal 타입 확장 |
+| `agents/math_helper.py` | 노드 로직 구현 |
+| `agents/__init__.py` | export 추가 |
+| `config/settings.py` | LLM 설정 추가 |
+| `graph/builder.py` | `add_node` + `add_edge(END)` 두 줄 추가 |
+| `agents/supervisor.py` | `RouteDecision` 타입 + 프롬프트 수정 |
+| `main.py` | 스트리밍 레이블 추가 (선택) |
+| `backend/routes/run.py` | 스트리밍 노드 추가 (선택) |
